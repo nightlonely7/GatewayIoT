@@ -1,25 +1,16 @@
 package vn.edu.fpt.helloworld;
 
-import androidx.annotation.RequiresApi;
 import androidx.appcompat.app.AppCompatActivity;
 
 import android.app.PendingIntent;
-import android.content.ActivityNotFoundException;
 import android.content.Context;
 import android.content.Intent;
 import android.hardware.usb.UsbDeviceConnection;
 import android.hardware.usb.UsbManager;
-import android.os.Build;
 import android.os.Bundle;
-import android.speech.RecognitionListener;
-import android.speech.RecognizerIntent;
-import android.speech.SpeechRecognizer;
 import android.util.Log;
-import android.view.View;
 import android.widget.Button;
-import android.widget.EditText;
 import android.widget.TextView;
-import android.widget.Toast;
 
 import com.google.gson.Gson;
 import com.google.gson.annotations.SerializedName;
@@ -28,8 +19,6 @@ import com.hoho.android.usbserial.driver.UsbSerialPort;
 import com.hoho.android.usbserial.driver.UsbSerialProber;
 import com.hoho.android.usbserial.util.SerialInputOutputManager;
 import com.jjoe64.graphview.GraphView;
-import com.jjoe64.graphview.series.DataPoint;
-import com.jjoe64.graphview.series.LineGraphSeries;
 import com.squareup.okhttp.Callback;
 import com.squareup.okhttp.MediaType;
 import com.squareup.okhttp.OkHttpClient;
@@ -39,21 +28,13 @@ import com.squareup.okhttp.Response;
 
 import java.io.IOException;
 import java.time.LocalDateTime;
-import java.time.ZoneOffset;
-import java.time.chrono.ChronoLocalDate;
 import java.time.format.DateTimeFormatter;
-import java.time.temporal.ChronoField;
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.HashMap;
 import java.util.List;
-import java.util.Locale;
-import java.util.Map;
-import java.util.Random;
 import java.util.Timer;
 import java.util.TimerTask;
 import java.util.concurrent.Executors;
-import java.util.stream.Collectors;
+
+import lombok.Data;
 
 public class MainActivity extends AppCompatActivity implements SerialInputOutputManager.Listener {
 
@@ -61,13 +42,14 @@ public class MainActivity extends AppCompatActivity implements SerialInputOutput
     private static final String INTENT_ACTION_GRANT_USB = BuildConfig.APPLICATION_ID + ".GRANT_USB";
     private static final int REQ_CODE_SPEECH_INPUT = 1;
 
-    private static final String GATEWAY_URL = "http://192.168.1.15:8080";
+    private static final String CLOUD_SERVER_URL = "http://192.168.1.10:8080";
 
     UsbSerialPort port;
 
     private static final Gson GSON = new Gson();
 
     private String buffer = "";
+    private List<Execution> executionList;
 
     private static GraphView GRAPH_VIEW_TEMPERATURE;
     private static GraphView GRAPH_VIEW_MOISTURE;
@@ -87,24 +69,39 @@ public class MainActivity extends AppCompatActivity implements SerialInputOutput
 //        GRAPH_VIEW_MOISTURE.getViewport().setYAxisBoundsManual(true);
 //
 //        Random r = new Random();
-//        Timer timer = new Timer();
-//        TimerTask timerTask1 = new TimerTask() {
-//            @Override
-//            public void run() {
-//                writeSerial("GET_MOISTURE");
-//            }
-//        };
-//        timer.schedule(timerTask1, 10000, 10000);
-//        TimerTask timerTask2 = new TimerTask() {
-//            @Override
-//            public void run() {
-//                getDataFromThingSpeak();
-//            }
-//        };
-//        timer.schedule(timerTask2, 5000, 10000);
+        Timer timer = new Timer();
 
-        Button buttonOn = (Button) findViewById(R.id.btn_on);
+        TimerTask executionTask = new TimerTask() {
+            @Override
+            public void run() {
+                getExecutionList().stream().filter(execution -> !execution.getExecuted()).forEach(execution -> execute(execution));
+            }
+        };
+        timer.schedule(executionTask, 1000, 5000);
+
+        TimerTask getMoistureTask = new TimerTask() {
+            @Override
+            public void run() {
+                writeSerial("GET_MOISTURE");
+            }
+        };
+        timer.schedule(getMoistureTask, 2000, 5000);
+
+        Button buttonOn = findViewById(R.id.btn_on);
         buttonOn.setOnClickListener(v -> writeSerial("GET_MOISTURE"));
+
+        Button buttonVoice = findViewById(R.id.btn_voice);
+        buttonVoice.setOnClickListener(v -> writeSerial("EXECUTE:5000"));
+
+        Button buttonOff = findViewById(R.id.btn_off);
+        buttonOff.setOnClickListener(v -> {
+            SensorData sensorData = new SensorData();
+            sensorData.setSensorId("1");
+            sensorData.setSensorValue("1");
+            sensorData.setMeasureTime(LocalDateTime.now().format(DateTimeFormatter.ofPattern("uuuu-MM-dd HH:mm:ss")));
+            this.uploadDataToCloud(sensorData);
+        });
+
 //
 //        Button buttonOff = (Button) findViewById(R.id.btn_off);
 //        buttonOff.setOnClickListener(v -> openUART("OFF"));
@@ -121,55 +118,55 @@ public class MainActivity extends AppCompatActivity implements SerialInputOutput
 //        this.uploadDataToCloud(sensorData);
     }
 
-    private void sendDataToThingSpeak(Map<String, String> valuesMap) {
-        OkHttpClient okHttpClient = new OkHttpClient();
-        Request.Builder builder = new Request.Builder();
-        StringBuilder valuesStr = new StringBuilder();
-        for (String key : valuesMap.keySet()) {
-            valuesStr.append("&").append(key).append("=").append(valuesMap.get(key));
-        }
+//    private void sendDataToThingSpeak(Map<String, String> valuesMap) {
+//        OkHttpClient okHttpClient = new OkHttpClient();
+//        Request.Builder builder = new Request.Builder();
+//        StringBuilder valuesStr = new StringBuilder();
+//        for (String key : valuesMap.keySet()) {
+//            valuesStr.append("&").append(key).append("=").append(valuesMap.get(key));
+//        }
+//
+//        String apiURL = "https://api.thingspeak.com/update?api_key=RPJ1QF0BP5ENCMLX"
+//                + valuesStr.toString();
+//        Request request = builder.url(apiURL).build();
+//
+//        okHttpClient.newCall(request).enqueue(new Callback() {
+//            @Override
+//            public void onFailure(Request request, IOException e) {
+//
+//            }
+//
+//            @Override
+//            public void onResponse(Response response) throws IOException {
+//
+//                System.out.println(response.body().string());
+//
+//            }
+//        });
+//
+//    }
 
-        String apiURL = "https://api.thingspeak.com/update?api_key=RPJ1QF0BP5ENCMLX"
-                + valuesStr.toString();
-        Request request = builder.url(apiURL).build();
-
-        okHttpClient.newCall(request).enqueue(new Callback() {
-            @Override
-            public void onFailure(Request request, IOException e) {
-
-            }
-
-            @Override
-            public void onResponse(Response response) throws IOException {
-
-                System.out.println(response.body().string());
-
-            }
-        });
-
-    }
-
-    private void getDataFromThingSpeak() {
-        Map<String, String> valuesMap = new HashMap<>();
-        OkHttpClient okHttpClient = new OkHttpClient();
-        Request.Builder builder = new Request.Builder();
-        String apiURL = "http://192.168.1.47:8080/sensorData";
-        Request request = builder.url(apiURL).build();
-        okHttpClient.newCall(request).enqueue(new Callback() {
-            @Override
-            public void onFailure(Request request, IOException e) {
-                System.out.println(e.getMessage());
-                System.out.println(request.body());
-            }
-
-            @RequiresApi(api = Build.VERSION_CODES.N)
-            @Override
-            public void onResponse(Response response) throws IOException {
-
+//    private void getDataFromThingSpeak() {
+//        Map<String, String> valuesMap = new HashMap<>();
+//        OkHttpClient okHttpClient = new OkHttpClient();
+//        Request.Builder builder = new Request.Builder();
+//        String apiURL = "http://192.168.1.47:8080/sensorData";
+//        Request request = builder.url(apiURL).build();
+//        okHttpClient.newCall(request).enqueue(new Callback() {
+//            @Override
+//            public void onFailure(Request request, IOException e) {
+//                System.out.println(e.getMessage());
+//                System.out.println(request.body());
+//            }
+//
+//            @RequiresApi(api = Build.VERSION_CODES.N)
+//            @Override
+//            public void onResponse(Response response) throws IOException {
+//
 //                ThingSpeakResponse thingSpeakResponse = GSON.fromJson(response.body().string(), ThingSpeakResponse.class);
 //                List<Feed> feeds = new ArrayList<>(thingSpeakResponse.getFeedList());
-                System.out.println(response.body().string());
-
+//                System.out.println(response.body().string());
+//
 //                GRAPH_VIEW_TEMPERATURE.removeAllSeries();
 //                DateTimeFormatter dateTimeFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss'Z'");
 //                List<DataPoint> dataPointTemperature = feeds.stream().map(feed -> new DataPoint(
@@ -192,9 +189,9 @@ public class MainActivity extends AppCompatActivity implements SerialInputOutput
 //                }
 //                LineGraphSeries<DataPoint> seriesMoisture = new LineGraphSeries<>(dataPointMoistureArr);
 //                GRAPH_VIEW_MOISTURE.addSeries(seriesMoisture);
-            }
-        });
-    }
+//            }
+//        });
+//    }
 
     @Override
     public void onNewData(byte[] data) {
@@ -216,6 +213,12 @@ public class MainActivity extends AppCompatActivity implements SerialInputOutput
                 sensorData.setSensorValue(moistureValue);
                 sensorData.setMeasureTime(LocalDateTime.now().format(DateTimeFormatter.ofPattern("uuuu-MM-dd HH:mm:ss")));
                 uploadDataToCloud(sensorData);
+            } else if (value.startsWith("EXECUTE_DONE")) {
+                getExecutionList().forEach(execution -> {
+                    execution.setExecuted(Boolean.TRUE);
+                    execution.setExecutionTime(LocalDateTime.now().format(DateTimeFormatter.ofPattern("uuuu-MM-dd HH:mm:ss")));
+                    updateExecution(execution);
+                });
             }
         }
         if (buffer.length() >= 256) {
@@ -227,7 +230,7 @@ public class MainActivity extends AppCompatActivity implements SerialInputOutput
 
         OkHttpClient okHttpClient = new OkHttpClient();
         Request.Builder builder = new Request.Builder();
-        String apiURL = GATEWAY_URL + "/sensorData";
+        String apiURL = CLOUD_SERVER_URL + "/sensorData";
         RequestBody body = RequestBody.create(
                 MediaType.parse("application/json"), GSON.toJson(sensorData));
         Request request = builder.url(apiURL).post(body).build();
@@ -241,6 +244,93 @@ public class MainActivity extends AppCompatActivity implements SerialInputOutput
             public void onResponse(Response response) throws IOException {
 //                TextView textView2 = findViewById(R.id.txt_voice);
 //                textView2.setText(response.body().string());
+            }
+        });
+    }
+
+    private List<Execution> getExecutionList() {
+        OkHttpClient okHttpClient = new OkHttpClient();
+        Request.Builder builder = new Request.Builder();
+        String apiURL = CLOUD_SERVER_URL + "/execution";
+        Request request = builder.url(apiURL).get().build();
+        String responseBody = null;
+        try {
+            Response response = okHttpClient.newCall(request).execute();
+            responseBody = response.body().string();
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+        List<Execution> executionList = GSON.fromJson(responseBody, ExecutionGet.class).getData();
+        System.out.println(executionList);
+        return executionList;
+    }
+
+    private List<SensorData> getSensorDataList() {
+        OkHttpClient okHttpClient = new OkHttpClient();
+        Request.Builder builder = new Request.Builder();
+        String apiURL = CLOUD_SERVER_URL + "/sensorData";
+        Request request = builder.url(apiURL).get().build();
+        String responseBody = null;
+        try {
+            Response response = okHttpClient.newCall(request).execute();
+            responseBody = response.body().string();
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+        List<SensorData> sensorDataList = GSON.fromJson(responseBody, SensorDataGet.class).getData();
+        System.out.println(sensorDataList);
+        return sensorDataList;
+    }
+
+    private List<SensorAutomation> getSensorAutomationFromServer() {
+        OkHttpClient okHttpClient = new OkHttpClient();
+        Request.Builder builder = new Request.Builder();
+        String apiURL = CLOUD_SERVER_URL + "/sensorAutomation";
+        Request request = builder.url(apiURL).get().build();
+        String responseBody = null;
+        try {
+            Response response = okHttpClient.newCall(request).execute();
+            responseBody = response.body().string();
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+        List<SensorAutomation> sensorAutomationList = GSON.fromJson(responseBody, SensorAutomationGet.class).getData();
+        System.out.println(sensorAutomationList);
+        return sensorAutomationList;
+    }
+
+    private void sendExecutionToServer(Execution execution) {
+
+        OkHttpClient okHttpClient = new OkHttpClient();
+        Request.Builder builder = new Request.Builder();
+        String apiURL = CLOUD_SERVER_URL + "/execution";
+        RequestBody body = RequestBody.create(
+                MediaType.parse("application/json"), GSON.toJson(execution));
+        Request request = builder.url(apiURL).post(body).build();
+        try {
+            okHttpClient.newCall(request).execute();
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+    }
+
+    private void updateExecution(Execution execution) {
+
+        OkHttpClient okHttpClient = new OkHttpClient();
+        Request.Builder builder = new Request.Builder();
+        String apiURL = CLOUD_SERVER_URL + "/execution/" + execution.getExecutionId();
+        RequestBody body = RequestBody.create(
+                MediaType.parse("application/json"), GSON.toJson(execution));
+        Request request = builder.url(apiURL).put(body).build();
+        okHttpClient.newCall(request).enqueue(new Callback() {
+            @Override
+            public void onFailure(Request request, IOException e) {
+
+            }
+
+            @Override
+            public void onResponse(Response response) throws IOException {
+
             }
         });
     }
@@ -263,6 +353,7 @@ public class MainActivity extends AppCompatActivity implements SerialInputOutput
         }
     }
 
+    @Data
     private static final class Feed {
         @SerializedName("entry_id")
         private final String entryId;
@@ -272,60 +363,8 @@ public class MainActivity extends AppCompatActivity implements SerialInputOutput
         private final String field1;
         @SerializedName("field2")
         private final String field2;
-
-        public String getCreatedAt() {
-            return createdAt;
-        }
-
-        public String getEntryId() {
-            return entryId;
-        }
-
-        public String getField1() {
-            return field1;
-        }
-
-        public String getField2() {
-            return field2;
-        }
-
-        private Feed(String field1, String entryId, String createdAt, String field2) {
-            this.entryId = entryId;
-            this.createdAt = createdAt;
-            this.field1 = field1;
-            this.field2 = field2;
-        }
     }
 
-    private static final class SensorData {
-        private String sensorId;
-        private String sensorValue;
-        private String measureTime;
-
-        public String getSensorId() {
-            return sensorId;
-        }
-
-        public void setSensorId(String sensorId) {
-            this.sensorId = sensorId;
-        }
-
-        public String getSensorValue() {
-            return sensorValue;
-        }
-
-        public void setSensorValue(String sensorValue) {
-            this.sensorValue = sensorValue;
-        }
-
-        public String getMeasureTime() {
-            return measureTime;
-        }
-
-        public void setMeasureTime(String measureTime) {
-            this.measureTime = measureTime;
-        }
-    }
 
     private void writeSerial(String writeValue) {
         UsbManager manager = (UsbManager) getSystemService(Context.USB_SERVICE);
@@ -366,76 +405,158 @@ public class MainActivity extends AppCompatActivity implements SerialInputOutput
 
     }
 
-    private void openUART() {
-        UsbManager manager = (UsbManager) getSystemService(Context.USB_SERVICE);
-        List<UsbSerialDriver> availableDrivers = UsbSerialProber.getDefaultProber().findAllDrivers(manager);
+//    private void automate() {
+//        List<SensorData> sensorDataList = getSensorDataList();
+//        List<Execution> executionList = getExecutionList();
+//        List<SensorAutomation> sensorAutomationList = getSensorAutomationFromServer();
+//        sensorAutomationList.forEach(sensorAutomation -> {
+//            if (sensorAutomation.getAutomationEnabled()) {
+//                Integer currentHumidity = Integer.MAX_VALUE;
+//                if (!sensorDataList.isEmpty()) {
+//                    currentHumidity = Integer.parseInt(sensorDataList.get(0).getSensorValue());
+//                }
+//                if (sensorAutomation.getMinHumidity() >= currentHumidity
+//                        && executionList.stream().allMatch(Execution::getExecuted)) {
+//                    Execution execution = new Execution();
+//                    execution.setExecutionId("EXECUTION_" + System.currentTimeMillis());
+//                    execution.setSensorId("1");
+//                    execution.setCurrentHumidity(currentHumidity);
+//                    execution.setTargetHumidity(sensorAutomation.getMaxHumidity());
+//                    execution.setRequestTime(LocalDateTime.now().format(DateTimeFormatter.ofPattern("uuuu-MM-dd HH:mm:ss")));
+//                    execution.setExecuted(Boolean.FALSE);
+//                    sendExecutionToServer(execution);
+//                }
+//            }
+//        });
+//    }
 
-        if (availableDrivers.isEmpty()) {
-            Log.d("UART", "UART is not available");
-
-        } else {
-            Log.d("UART", "UART is available");
-
-            UsbSerialDriver driver = availableDrivers.get(0);
-            UsbDeviceConnection connection = manager.openDevice(driver.getDevice());
-            if (connection == null) {
-
-                PendingIntent usbPermissionIntent = PendingIntent.getBroadcast(this, 0, new Intent(INTENT_ACTION_GRANT_USB), 0);
-                manager.requestPermission(driver.getDevice(), usbPermissionIntent);
-
-                manager.requestPermission(driver.getDevice(), PendingIntent.getBroadcast(this, 0, new Intent(ACTION_USB_PERMISSION), 0));
-
-            } else {
-
-                port = driver.getPorts().get(0);
-                try {
-                    port.open(connection);
-                    port.setParameters(115200, 8, UsbSerialPort.STOPBITS_1, UsbSerialPort.PARITY_NONE);
-
-                    port.write(("init#").getBytes(), 1000);
-
-                    SerialInputOutputManager usbIoManager = new SerialInputOutputManager(port, this);
-                    Executors.newSingleThreadExecutor().submit(usbIoManager);
-
-                } catch (Exception ignored) {
-
-                }
-            }
-        }
-
+    private void execute(Execution execution) {
+        writeSerial("EXECUTE:" + (execution.getTargetHumidity() - execution.getCurrentHumidity()));
     }
 
-    private void promptSpeechInput() {
-        Intent intent = new Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH);
-        intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL,
-                RecognizerIntent.LANGUAGE_MODEL_FREE_FORM);
-        intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE, Locale.getDefault());
-        intent.putExtra(RecognizerIntent.EXTRA_PROMPT, "Listening...");
-        try {
-            startActivityForResult(intent, REQ_CODE_SPEECH_INPUT);
-        } catch (ActivityNotFoundException a) {
-            Toast.makeText(getApplicationContext(), "Not supported.",
-                    Toast.LENGTH_SHORT).show();
-        }
+//    private void openUART() {
+//        UsbManager manager = (UsbManager) getSystemService(Context.USB_SERVICE);
+//        List<UsbSerialDriver> availableDrivers = UsbSerialProber.getDefaultProber().findAllDrivers(manager);
+//
+//        if (availableDrivers.isEmpty()) {
+//            Log.d("UART", "UART is not available");
+//
+//        } else {
+//            Log.d("UART", "UART is available");
+//
+//            UsbSerialDriver driver = availableDrivers.get(0);
+//            UsbDeviceConnection connection = manager.openDevice(driver.getDevice());
+//            if (connection == null) {
+//
+//                PendingIntent usbPermissionIntent = PendingIntent.getBroadcast(this, 0, new Intent(INTENT_ACTION_GRANT_USB), 0);
+//                manager.requestPermission(driver.getDevice(), usbPermissionIntent);
+//
+//                manager.requestPermission(driver.getDevice(), PendingIntent.getBroadcast(this, 0, new Intent(ACTION_USB_PERMISSION), 0));
+//
+//            } else {
+//
+//                port = driver.getPorts().get(0);
+//                try {
+//                    port.open(connection);
+//                    port.setParameters(115200, 8, UsbSerialPort.STOPBITS_1, UsbSerialPort.PARITY_NONE);
+//
+//                    port.write(("init#").getBytes(), 1000);
+//
+//                    SerialInputOutputManager usbIoManager = new SerialInputOutputManager(port, this);
+//                    Executors.newSingleThreadExecutor().submit(usbIoManager);
+//
+//                } catch (Exception ignored) {
+//
+//                }
+//            }
+//        }
+//
+//    }
+
+//    private void promptSpeechInput() {
+//        Intent intent = new Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH);
+//        intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL,
+//                RecognizerIntent.LANGUAGE_MODEL_FREE_FORM);
+//        intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE, Locale.getDefault());
+//        intent.putExtra(RecognizerIntent.EXTRA_PROMPT, "Listening...");
+//        try {
+//            startActivityForResult(intent, REQ_CODE_SPEECH_INPUT);
+//        } catch (ActivityNotFoundException a) {
+//            Toast.makeText(getApplicationContext(), "Not supported.",
+//                    Toast.LENGTH_SHORT).show();
+//        }
+//    }
+
+//    @Override
+//    protected void onActivityResult(int requestCode, int resultCode, Intent
+//            data) {
+//        super.onActivityResult(requestCode, resultCode, data);
+//
+//        switch (requestCode) {
+//            case REQ_CODE_SPEECH_INPUT: {
+//                if (resultCode == RESULT_OK && null != data) {
+//                    ArrayList<String> result = data.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS);
+//                    Log.d("VOICEEEEE", Arrays.toString(result.toArray()));
+//                    this.writeSerial(result.get(0).toUpperCase());
+//                    TextView textView = findViewById(R.id.txt_voice);
+//                    textView.setText(result.get(0).toUpperCase());
+//                }
+//                break;
+//            }
+//
+//        }
+//    }
+
+
+    @Data
+    private static final class SensorDataGet {
+        private String code;
+        private String message;
+        private List<SensorData> data;
     }
 
-    @Override
-    protected void onActivityResult(int requestCode, int resultCode, Intent
-            data) {
-        super.onActivityResult(requestCode, resultCode, data);
+    @Data
+    private static final class SensorData {
+        private String sensorId;
+        private String sensorValue;
+        private String measureTime;
+    }
 
-        switch (requestCode) {
-            case REQ_CODE_SPEECH_INPUT: {
-                if (resultCode == RESULT_OK && null != data) {
-                    ArrayList<String> result = data.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS);
-                    Log.d("VOICEEEEE", Arrays.toString(result.toArray()));
-                    this.writeSerial(result.get(0).toUpperCase());
-                    TextView textView = findViewById(R.id.txt_voice);
-                    textView.setText(result.get(0).toUpperCase());
-                }
-                break;
-            }
+    @Data
+    private static final class ExecutionGet {
+        private String code;
+        private String message;
+        private List<Execution> data;
+    }
 
-        }
+    @Data
+    private static final class Execution {
+        private String executionId;
+        private String sensorId;
+        private Integer currentHumidity;
+        private Integer targetHumidity;
+        private String executionTime;
+        private String requestTime;
+        private Boolean executed;
+    }
+
+    @Data
+    private static final class SensorAutomationGet {
+        private String code;
+        private String message;
+        private List<SensorAutomation> data;
+    }
+
+    @Data
+    private static final class SensorAutomation {
+        private String sensorId;
+        private String sensorAutomationId;
+        private String sensorAutomationName;
+        private Integer minHumidity;
+        private Integer maxHumidity;
+        private Integer minPeriod;
+        private Integer maxPeriod;
+        private Boolean automationEnabled;
+        private Boolean applied;
     }
 }
